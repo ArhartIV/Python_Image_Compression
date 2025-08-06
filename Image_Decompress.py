@@ -1,3 +1,8 @@
+#Programm that decompresses an image, that was earlier compressed with a custom Huffman coding scheme
+#and a custom quantization matrix.
+#It uses 2F IFFT and RLE deciding mimicing the real procces how it is done in jpeg files
+#Author: Artur Shyutts
+
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2 as cv
@@ -140,13 +145,16 @@ def inverse_zigzag(flat_block, indices):
 #reconstruction from blocks
 def reconstruct_image(blocks, shape, block_size=8):
   h, w = shape
-  image = np.zeros((h, w), dtype=np.float32)
+  block_size = 8
+  padded_h = int(np.ceil(h / block_size)) * block_size
+  padded_w = int(np.ceil(w / block_size)) * block_size
+  image = np.zeros((padded_h, padded_w), dtype=np.float32)
   idx = 0
-  for i in range(0, h, block_size):
-    for j in range(0, w, block_size):
+  for i in range(0, padded_h, block_size):
+    for j in range(0, padded_w, block_size):
       image[i:i+block_size, j:j+block_size] = blocks[idx]
       idx += 1
-  return image
+  return image[:h, :w]
 
 #Chroma upsampling 4:2:0
 def chroma_upsample_420(Cr, Cb, target_shape):
@@ -215,7 +223,7 @@ Q_For_Clr = np.array([
 ])
 
 indices = zigzag_indices(n=8)
-S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape = load_compressed_file('compressed_image.huff')
+S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape = load_compressed_file('food.huff')
 decoder = rebuild_huffman_decoder(codes)
 
 indices = zigzag_indices(n=8)
@@ -267,7 +275,7 @@ plt.axis('off')
 plt.tight_layout()
 plt.show()
 
-cv.imwrite('reconstructed_image.jpg', final_image)
-print("Reconstructed image saved as 'reconstructed_image.jpg'")
+cv.imwrite('food_rec.jpg', final_image)
+print("Reconstructed image saved as 'food_rec.jpg'")
 
 

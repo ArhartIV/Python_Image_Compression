@@ -1,3 +1,7 @@
+#This Program compresses an image using a Block division, 2D FFT and  a custom Huffman
+# + RLE encoding scheme
+#Author: Artur Shyutts
+
 import numpy as np
 import cv2 as cv
 import heapq
@@ -61,7 +65,6 @@ def bit_reverse_indices(N):
   return np.array([int(f'{i:0{bits}b}'[::-1], 2) for i in range(N)])
 
 #My Custom Fast Fourier Transform that uses iterative algorithm and Bit reversal
-#It Mimics the real way it is done in Jpeg compression
 def FFT(signal):
   N = len(signal)
 
@@ -231,7 +234,7 @@ Q_For_Clr = np.array([
   [99, 99, 99, 99, 99, 99, 99, 99]
 ])
 
-image = cv.imread('Hr_Image.jpg', cv.IMREAD_COLOR)
+image = cv.imread('food.jpg', cv.IMREAD_COLOR)
 image = cv.cvtColor(image, cv.COLOR_BGR2YCrCb)
 Y, Cr, Cb = cv.split(image)
 
@@ -250,9 +253,9 @@ Y_fft_blocks = [TwoDFFT(block) for block in Y_blocks]
 Cr_fft_blocks = [TwoDFFT(block) for block in Cr_blocks]
 Cb_fft_blocks = [TwoDFFT(block) for block in Cb_blocks]
 
-Y_quantized = [quantize_block(block, Q_For_Y, threshold=2) for block in Y_fft_blocks]
-Cr_quantized = [quantize_block(block, Q_For_Clr, threshold=300) for block in Cr_fft_blocks]
-Cb_quantized = [quantize_block(block, Q_For_Clr, threshold=300) for block in Cb_fft_blocks]
+Y_quantized = [quantize_block(block, Q_For_Y, threshold=0) for block in Y_fft_blocks]
+Cr_quantized = [quantize_block(block, Q_For_Clr, threshold=200) for block in Cr_fft_blocks]
+Cb_quantized = [quantize_block(block, Q_For_Clr, threshold=200) for block in Cb_fft_blocks]
 
 Y_zigzag = [zigzag_scan(block, indices) for block in Y_quantized]
 Cb_zigzag = [zigzag_scan(block, indices) for block in Cb_quantized]
@@ -288,5 +291,5 @@ bitstream = ''.join(bitstream_parts)
 
 S_bytes, padding = Bits_to_Bytes(bitstream)
 
-save_compressed_file('compressed_image.huff', S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape)
+save_compressed_file('food.huff', S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape)
 
