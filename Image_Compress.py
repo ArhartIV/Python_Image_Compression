@@ -8,6 +8,8 @@ import heapq
 from collections import Counter
 import json
 import struct
+import argparse
+import sys
 
 EOB = (0, 0)
 class Huffman_Node: 
@@ -75,9 +77,7 @@ def FFT(signal):
     signal = New_Signal
     N = New_N
 
-
   New_Signal = np.array(signal, dtype=complex)
-
 
   indices = bit_reverse_indices(N)
   New_Signal = New_Signal[indices]
@@ -110,14 +110,10 @@ def chroma_subsample_420(Cr, Cb):
   return Cr_sub, Cb_sub
 
 #Converts a bitstring to bytes, adding padding if necessary
-def  Bits_to_Bytes(bitstring):
+def Bits_to_Bytes(bitstring):
   padding = (8 - len(bitstring) % 8) % 8
   bitstring += '0' * padding
-  byte_arr = bytearray()
-  for i in range(0, len(bitstring), 8):
-    byte = int(bitstring[i:i+8], 2)
-    byte_arr.append(byte)
-  return bytes(byte_arr), padding
+  return bytes(int(bitstring[i:i+8], 2) for i in range(0, len(bitstring), 8)), padding
 
 #Zigzag scan for 8x8 blocks
 def zigzag_indices(n=8):
@@ -139,12 +135,8 @@ def divide_blocks(image, block_size=8):
   pad_w = (block_size - (w % block_size)) % block_size
 
   padded = np.pad(image, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
-  blocks = []
-
-  for i in range(0, padded.shape[0], block_size):
-    for j in range(0, padded.shape[1], block_size):
-      blocks.append(padded[i:i+block_size, j:j+block_size])
-  return blocks
+  h_pad, w_pad = padded.shape
+  return padded.reshape(h_pad // block_size, block_size, -1, block_size).swapaxes(1, 2).reshape(-1, block_size, block_size)
 
 #Quantizes the block with the given Matrix and threshold
 def quantize_block(block, quant_table, threshold=0):
@@ -234,62 +226,69 @@ Q_For_Clr = np.array([
   [99, 99, 99, 99, 99, 99, 99, 99]
 ])
 
-image = cv.imread('food.jpg', cv.IMREAD_COLOR)
-image = cv.cvtColor(image, cv.COLOR_BGR2YCrCb)
-Y, Cr, Cb = cv.split(image)
+if __name__ == "__main__":
+  parser = argparse.ArgumentParser()
+  parser.add_argument("input_image")
+  parser.add_argument("-o", "--output", default="output.huff")
+  args = parser.parse_args()
 
-Cr_sub, Cb_sub = chroma_subsample_420(Cr, Cb)
-indices = zigzag_indices(n=8)
+  image = cv.imread(args.input_image, cv.IMREAD_COLOR)
+  if image is None:
+    sys.exit(1)
 
-Y_shape = Y.shape
-Cr_shape = Cr_sub.shape
-Cb_shape = Cb_sub.shape
+  image = cv.cvtColor(image, cv.COLOR_BGR2YCrCb)
+  Y, Cr, Cb = cv.split(image)
 
-Y_blocks = divide_blocks(Y)
-Cr_blocks = divide_blocks(Cr_sub)
-Cb_blocks = divide_blocks(Cb_sub)
+  Cr_sub, Cb_sub = chroma_subsample_420(Cr, Cb)
+  indices = zigzag_indices(n=8)
 
-Y_fft_blocks = [TwoDFFT(block) for block in Y_blocks]
-Cr_fft_blocks = [TwoDFFT(block) for block in Cr_blocks]
-Cb_fft_blocks = [TwoDFFT(block) for block in Cb_blocks]
+  Y_shape = Y.shape
+  Cr_shape = Cr_sub.shape
+  Cb_shape = Cb_sub.shape
 
-Y_quantized = [quantize_block(block, Q_For_Y, threshold=0) for block in Y_fft_blocks]
-Cr_quantized = [quantize_block(block, Q_For_Clr, threshold=200) for block in Cr_fft_blocks]
-Cb_quantized = [quantize_block(block, Q_For_Clr, threshold=200) for block in Cb_fft_blocks]
+  Y_blocks = divide_blocks(Y)
+  Cr_blocks = divide_blocks(Cr_sub)
+  Cb_blocks = divide_blocks(Cb_sub)
 
-Y_zigzag = [zigzag_scan(block, indices) for block in Y_quantized]
-Cb_zigzag = [zigzag_scan(block, indices) for block in Cb_quantized]
-Cr_zigzag = [zigzag_scan(block, indices) for block in Cr_quantized]
+  Y_fft_blocks = [TwoDFFT(block) for block in Y_blocks]
+  Cr_fft_blocks = [TwoDFFT(block) for block in Cr_blocks]
+  Cb_fft_blocks = [TwoDFFT(block) for block in Cb_blocks]
+
+  Y_quantized = [quantize_block(block, Q_For_Y, threshold=0) for block in Y_fft_blocks]
+  Cr_quantized = [quantize_block(block, Q_For_Clr, threshold=200) for block in Cr_fft_blocks]
+  Cb_quantized = [quantize_block(block, Q_For_Clr, threshold=200) for block in Cb_fft_blocks]
+
+  Y_zigzag = [zigzag_scan(block, indices) for block in Y_quantized]
+  Cb_zigzag = [zigzag_scan(block, indices) for block in Cb_quantized]
+  Cr_zigzag = [zigzag_scan(block, indices) for block in Cr_quantized]
+
+  Y_zigzag = [[int(round(val)) for val in block] for block in Y_zigzag]
+  Cb_zigzag = [[int(round(val)) for val in block] for block in Cb_zigzag]
+  Cr_zigzag = [[int(round(val)) for val in block] for block in Cr_zigzag]
 
 
-Y_zigzag = [[int(round(val)) for val in block] for block in Y_zigzag]
-Cb_zigzag = [[int(round(val)) for val in block] for block in Cb_zigzag]
-Cr_zigzag = [[int(round(val)) for val in block] for block in Cr_zigzag]
+  symbols = []
+  encoded_blocks = []
 
+  for blocks in [Y_zigzag, Cr_zigzag, Cb_zigzag]:
+    for block in blocks:
+      encoded = rle_encode(block)
+      encoded_blocks.append(encoded)
+      for (runcat, _) in encoded:
+        symbols.append(runcat)
 
-symbols = []
-encoded_blocks = []
+  tree = Build_Huffman_tree(symbols)
+  codes = build_huffman_codes(tree)
 
-for blocks in [Y_zigzag, Cr_zigzag, Cb_zigzag]:
-  for block in blocks:
-    encoded = rle_encode(block)
-    encoded_blocks.append(encoded)
-    for (runcat, _) in encoded:
-      symbols.append(runcat)
+  codebook = codes
+  codebook = {stringify_symbol(sym): code for sym, code in codes.items()}
 
-tree = Build_Huffman_tree(symbols)
-codes = build_huffman_codes(tree)
+  bitstream_parts = []
+  for block in encoded_blocks:
+      for (runcat, val_bits) in block:
+          bitstream_parts.append(codes[runcat] + val_bits)
+  bitstream = ''.join(bitstream_parts)
 
-codebook = codes
-codebook = {stringify_symbol(sym): code for sym, code in codes.items()}
+  S_bytes, padding = Bits_to_Bytes(bitstream)
 
-bitstream_parts = []
-for block in encoded_blocks:
-    for (runcat, val_bits) in block:
-        bitstream_parts.append(codes[runcat] + val_bits)
-bitstream = ''.join(bitstream_parts)
-
-S_bytes, padding = Bits_to_Bytes(bitstream)
-
-save_compressed_file('food.huff', S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape)
-
+  save_compressed_file(args.output, S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape)

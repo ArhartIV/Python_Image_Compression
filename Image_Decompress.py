@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import cv2 as cv
 import json
 import struct
+import argparse
+import sys
 
 #Find the closest Power of Two
 def PowerOfTwo(x):
@@ -138,22 +140,19 @@ def dequantize_block(block, quant_table):
 #Inverse zigzag
 def inverse_zigzag(flat_block, indices):
   block = np.zeros((8,8), dtype=np.float32)
-  for idx, (i, j) in enumerate(indices):
-    block[i, j] = flat_block[idx]
+  idx_i, idx_j = zip(*indices)
+  block[idx_i, idx_j] = flat_block
   return block
 
 #reconstruction from blocks
 def reconstruct_image(blocks, shape, block_size=8):
   h, w = shape
-  block_size = 8
   padded_h = int(np.ceil(h / block_size)) * block_size
   padded_w = int(np.ceil(w / block_size)) * block_size
-  image = np.zeros((padded_h, padded_w), dtype=np.float32)
-  idx = 0
-  for i in range(0, padded_h, block_size):
-    for j in range(0, padded_w, block_size):
-      image[i:i+block_size, j:j+block_size] = blocks[idx]
-      idx += 1
+  blocks = np.array(blocks)
+  grid_h = padded_h // block_size
+  grid_w = padded_w // block_size
+  image = blocks.reshape(grid_h, grid_w, block_size, block_size).swapaxes(1, 2).reshape(padded_h, padded_w)
   return image[:h, :w]
 
 #Chroma upsampling 4:2:0
@@ -222,60 +221,64 @@ Q_For_Clr = np.array([
   [99, 99, 99, 99, 99, 99, 99, 99]
 ])
 
-indices = zigzag_indices(n=8)
-S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape = load_compressed_file('food.huff')
-decoder = rebuild_huffman_decoder(codes)
+if __name__ == "__main__":
+  parser = argparse.ArgumentParser()
+  parser.add_argument("input_file")
+  parser.add_argument("-o", "--output", default="output_rec.jpg")
+  args = parser.parse_args()
 
-indices = zigzag_indices(n=8)
-rle_blocks = decode_bitstream(S_bytes, padding, decoder)
+  indices = zigzag_indices(n=8)
+  S_bytes, padding, codes, Y_shape, Cr_shape, Cb_shape = load_compressed_file(args.input_file)
+  decoder = rebuild_huffman_decoder(codes)
 
-decoded_zigzags = [rle_decode(block) for block in rle_blocks]
+  indices = zigzag_indices(n=8)
+  rle_blocks = decode_bitstream(S_bytes, padding, decoder)
 
-Y_block_count = get_block_count(Y_shape)
-Cr_block_count = get_block_count(Cr_shape)
-Cb_block_count = get_block_count(Cb_shape)
+  decoded_zigzags = [rle_decode(block) for block in rle_blocks]
 
-Y_dec_zigzag = decoded_zigzags[:Y_block_count]
-Cr_dec_zigzag = decoded_zigzags[Y_block_count:Y_block_count + Cr_block_count]
-Cb_dec_zigzag = decoded_zigzags[Y_block_count + Cr_block_count:]
+  Y_block_count = get_block_count(Y_shape)
+  Cr_block_count = get_block_count(Cr_shape)
+  Cb_block_count = get_block_count(Cb_shape)
 
-Y_dec_blocks = [dequantize_block(inverse_zigzag(block, indices), Q_For_Y) for block in Y_dec_zigzag]
-Cr_dec_blocks = [dequantize_block(inverse_zigzag(block, indices), Q_For_Clr) for block in Cr_dec_zigzag]
-Cb_dec_blocks = [dequantize_block(inverse_zigzag(block, indices), Q_For_Clr) for block in Cb_dec_zigzag]
+  Y_dec_zigzag = decoded_zigzags[:Y_block_count]
+  Cr_dec_zigzag = decoded_zigzags[Y_block_count:Y_block_count + Cr_block_count]
+  Cb_dec_zigzag = decoded_zigzags[Y_block_count + Cr_block_count:]
 
-Y_ifft_blocks = [Inverse_TwoDFFT(block).real for block in Y_dec_blocks]
-Cr_ifft_blocks = [Inverse_TwoDFFT(block).real for block in Cr_dec_blocks]
-Cb_ifft_blocks = [Inverse_TwoDFFT(block).real for block in Cb_dec_blocks]
+  Y_dec_blocks = [dequantize_block(inverse_zigzag(block, indices), Q_For_Y) for block in Y_dec_zigzag]
+  Cr_dec_blocks = [dequantize_block(inverse_zigzag(block, indices), Q_For_Clr) for block in Cr_dec_zigzag]
+  Cb_dec_blocks = [dequantize_block(inverse_zigzag(block, indices), Q_For_Clr) for block in Cb_dec_zigzag]
 
-Y_reconstructed = reconstruct_image(Y_ifft_blocks, Y_shape)
-Cr_reconstructed = reconstruct_image(Cr_ifft_blocks, Cr_shape)
-Cb_reconstructed = reconstruct_image(Cb_ifft_blocks, Cb_shape)
+  Y_ifft_blocks = [Inverse_TwoDFFT(block).real for block in Y_dec_blocks]
+  Cr_ifft_blocks = [Inverse_TwoDFFT(block).real for block in Cr_dec_blocks]
+  Cb_ifft_blocks = [Inverse_TwoDFFT(block).real for block in Cb_dec_blocks]
 
-Y_reconstructed = np.clip(Y_reconstructed, 0, 255).astype(np.uint8)
-Cr_reconstructed = np.clip(Cr_reconstructed, 0, 255).astype(np.uint8)
-Cb_reconstructed = np.clip(Cb_reconstructed, 0, 255).astype(np.uint8)
+  Y_reconstructed = reconstruct_image(Y_ifft_blocks, Y_shape)
+  Cr_reconstructed = reconstruct_image(Cr_ifft_blocks, Cr_shape)
+  Cb_reconstructed = reconstruct_image(Cb_ifft_blocks, Cb_shape)
 
-Cr_reconstructed, Cb_reconstructed = chroma_upsample_420(Cr_reconstructed, Cb_reconstructed, Y_shape)
+  Y_reconstructed = np.clip(Y_reconstructed, 0, 255).astype(np.uint8)
+  Cr_reconstructed = np.clip(Cr_reconstructed, 0, 255).astype(np.uint8)
+  Cb_reconstructed = np.clip(Cb_reconstructed, 0, 255).astype(np.uint8)
 
-reconstructed_ycrcb = cv.merge([Y_reconstructed, Cr_reconstructed, Cb_reconstructed])
-final_image = cv.cvtColor(reconstructed_ycrcb, cv.COLOR_YCrCb2BGR)
+  Cr_reconstructed, Cb_reconstructed = chroma_upsample_420(Cr_reconstructed, Cb_reconstructed, Y_shape)
 
-plt.figure(figsize=(12, 8))
+  reconstructed_ycrcb = cv.merge([Y_reconstructed, Cr_reconstructed, Cb_reconstructed])
+  final_image = cv.cvtColor(reconstructed_ycrcb, cv.COLOR_YCrCb2BGR)
 
-plt.subplot(1, 2, 1)
-plt.imshow(cv.cvtColor(final_image, cv.COLOR_BGR2RGB))
-plt.title('Reconstructed Image')
-plt.axis('off')
+  plt.figure(figsize=(12, 8))
 
-plt.subplot(1, 2, 2)
-plt.imshow(Y_reconstructed, cmap='gray')
-plt.title('Y Channel (Luminance)')
-plt.axis('off')
+  plt.subplot(1, 2, 1)
+  plt.imshow(cv.cvtColor(final_image, cv.COLOR_BGR2RGB))
+  plt.title('Reconstructed Image')
+  plt.axis('off')
 
-plt.tight_layout()
-plt.show()
+  plt.subplot(1, 2, 2)
+  plt.imshow(Y_reconstructed, cmap='gray')
+  plt.title('Y Channel (Luminance)')
+  plt.axis('off')
 
-cv.imwrite('food_rec.jpg', final_image)
-print("Reconstructed image saved as 'food_rec.jpg'")
+  plt.tight_layout()
+  plt.show()
 
-
+  cv.imwrite(args.output, final_image)
+  print(f"Reconstructed image saved as '{args.output}'")
